@@ -43,7 +43,7 @@ uv run marimo edit notebooks/00_data_tour.py
 
 # full runs (write results/*.parquet, then open 04_leaderboard)
 uv run python scripts/run_backtest.py --model climatology
-uv run python scripts/run_backtest.py --model timestral-5M --mode covariates
+uv run python scripts/run_backtest.py --model timestral-5M --mode covariates --weather forecast
 uv run python scripts/run_backtest.py --model timesfm --mode covariates --device cuda
 uv run python scripts/run_backtest.py --model timestral-28M --origins extended --start 2025-10-01
 ```
@@ -64,6 +64,7 @@ needed. Files are cached in `data/`.
 
 * `latest/tijuana/forecast_data/modeldata_h2s_nofill.parquet`: hourly H2S + weather/tide/flow/SBIWTP, 3 stations, 2023-11 → present
 * `tijuana/forecast/validation_store/validation.parquet`: production XGBoost products (Lean/Evidence, leads 1–24) joined to measured H2S, 2026-06-28 → present
+* `tijuana/weather/raw/forecast_15min/forecast_15min_<issued>.json`: archived Open-Meteo forecasts, roughly hourly since 2026-04-10. `--weather forecast` uses the issuance available at each origin for the horizon covariates. The context window always uses observed weather from modeldata. The parsed archive is cached in `data/forecast_archive.parquet`.
 
 ## Licensing notes
 

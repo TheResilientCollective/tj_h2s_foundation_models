@@ -13,7 +13,14 @@ from typing import Literal, Protocol
 import numpy as np
 import pandas as pd
 
-from .data import KNOWN_FUTURE_COVARIATES, PAST_ONLY_COVARIATES, STATIONS, TARGET
+from .data import (
+    DETERMINISTIC_COVARIATES,
+    FORECAST_WEATHER_COVARIATES,
+    KNOWN_FUTURE_COVARIATES,
+    PAST_ONLY_COVARIATES,
+    STATIONS,
+    TARGET,
+)
 from .metrics import add_exceedance_probs, product_of
 
 Mode = Literal["univariate", "covariates", "multivariate", "multivariate_covariates"]
@@ -42,6 +49,10 @@ class BacktestConfig:
     horizon: int = 24
     transform: Literal["log1p", "none"] = "log1p"
     seed_lag_hours: int = 0
+    # "oracle": observed weather over the horizon (upper bound).
+    # "forecast": archived Open-Meteo forecast available at the origin (operational realism);
+    #             weather the feed does not forecast is held at its last observed value.
+    weather: Literal["oracle", "forecast"] = "oracle"
     batch_size: int = 64
     stations: list[str] = field(default_factory=lambda: list(STATIONS))
     known_covariates: list[str] = field(default_factory=lambda: list(KNOWN_FUTURE_COVARIATES))
@@ -74,17 +85,42 @@ def _slice(frame: pd.DataFrame, cols: list[str], start: int, stop: int) -> np.nd
     return out
 
 
+def _forecast_horizon(known: np.ndarray, cfg: BacktestConfig, fc: pd.DataFrame, horizon_times: pd.DatetimeIndex) -> np.ndarray:
+    """Replace the horizon part of the known-covariate block with what was knowable at the origin."""
+    known = known.copy()
+    n_ctx = known.shape[1] - len(horizon_times)
+    fc = fc.reindex(horizon_times).ffill().bfill()
+    for row, col in enumerate(cfg.known_covariates):
+        if col in DETERMINISTIC_COVARIATES:
+            continue
+        if col in FORECAST_WEATHER_COVARIATES:
+            known[row, n_ctx:] = fc[col].to_numpy()
+        else:  # not forecast by the feed: persistence of the last observation
+            known[row, n_ctx:] = known[row, n_ctx - 1]
+    return known
+
+
 def run_backtest(
     model: Forecaster,
     panel: dict[str, pd.DataFrame],
     origins: pd.DatetimeIndex,
     cfg: BacktestConfig,
     progress: bool = True,
+    weather_forecast: tuple | None = None,
 ) -> pd.DataFrame:
-    """Forecast every origin x station and return long rows joined to the measured H2S."""
+    """Forecast every origin x station and return long rows joined to the measured H2S.
+
+    ``weather_forecast`` is ``data.forecast_weather_for_origins(origins)``; required
+    when ``cfg.weather == "forecast"`` with a covariate mode. Origins without a
+    usable archived forecast are skipped.
+    """
     index = next(iter(panel.values())).index
     multivariate = cfg.mode.startswith("multivariate")
     with_cov = cfg.mode in ("covariates", "multivariate_covariates")
+    use_fc = with_cov and cfg.weather == "forecast"
+    if use_fc and weather_forecast is None:
+        raise ValueError("cfg.weather='forecast' needs weather_forecast=data.forecast_weather_for_origins(origins)")
+    by_issue, issued = weather_forecast if use_fc else ({}, None)
     pred_len = cfg.horizon + cfg.seed_lag_hours
 
     # one work item per (origin, station) — or per origin for multivariate
@@ -95,15 +131,25 @@ def run_backtest(
             continue  # origin outside the observed grid (or horizon runs past the data)
         ctx_end = pos - cfg.seed_lag_hours  # exclusive
         ctx_start = ctx_end - cfg.context_length
+        issue = issued.get(origin) if use_fc else None
+        if use_fc and pd.isna(issue):
+            continue  # no archived weather forecast for this origin
         groups = [cfg.stations] if multivariate else [[s] for s in cfg.stations]
         for stations in groups:
-            cov_frame = panel[SHARED_COVARIATE_STATION if multivariate else stations[0]]
+            cov_station = SHARED_COVARIATE_STATION if multivariate else stations[0]
+            cov_frame = panel[cov_station]
             target = np.stack([_slice(panel[s], [TARGET], ctx_start, ctx_end)[0] for s in stations])
             item = {"origin": origin, "stations": stations, "pos": pos,
                     "target": _forward(target, cfg.transform)}
             if with_cov:
                 item["past"] = _slice(cov_frame, cfg.past_covariates, ctx_start, ctx_end)
                 item["known"] = _slice(cov_frame, cfg.known_covariates, ctx_start, ctx_end + pred_len)
+                if use_fc:
+                    fc = by_issue.get((issue, cov_station))
+                    if fc is None:
+                        continue
+                    item["known"] = _forecast_horizon(item["known"], cfg, fc, index[ctx_end : ctx_end + pred_len])
+                    item["issued_at"] = issue
             items.append(item)
 
     rows = []
@@ -124,11 +170,11 @@ def run_backtest(
         for it, qi in zip(chunk, q):
             for v, station in enumerate(it["stations"]):
                 for lead in range(1, cfg.horizon + 1):
-                    rows.append((it["origin"], station, lead, it["pos"] + lead - 1, *qi[v, lead - 1]))
+                    rows.append((it["origin"], station, lead, it["pos"] + lead - 1, it.get("issued_at"), *qi[v, lead - 1]))
 
     levels = [round(float(t), 4) for t in model.quantile_levels]
     qcols = [f"q{t}" for t in levels]
-    out = pd.DataFrame(rows, columns=["origin", "station", "lead_hour", "_pos", *qcols])
+    out = pd.DataFrame(rows, columns=["origin", "station", "lead_hour", "_pos", "weather_issued_at", *qcols])
     out["time"] = index[out["_pos"].to_numpy()]
     out["actual_h2s"] = np.nan
     for station in out["station"].unique():
@@ -141,6 +187,7 @@ def run_backtest(
     out["mode"] = cfg.mode
     out["context_length"] = cfg.context_length
     out["seed_lag_hours"] = cfg.seed_lag_hours
+    out["weather"] = cfg.weather if with_cov else "none"
     return add_exceedance_probs(out, levels)
 
 

@@ -20,6 +20,9 @@ def label(df: pd.DataFrame) -> pd.Series:
     if "context_length" in df:
         ctx = df["context_length"]
         name = name.where(ctx.isna() | (ctx == 2048), name + "|ctx" + ctx.fillna(0).astype(int).astype(str))
+    if "weather" in df:
+        wx = df["weather"]
+        name = name.where(wx.isna() | wx.isin(["none", "oracle"]), name + "|wx-" + wx.fillna("").astype(str))
     if "seed_lag_hours" in df:
         lag = df["seed_lag_hours"]
         name = name.where(lag.isna() | (lag == 0), name + "|lag" + lag.fillna(0).astype(int).astype(str))

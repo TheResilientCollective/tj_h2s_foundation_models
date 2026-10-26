@@ -78,3 +78,34 @@ def test_rubric_matches_production_semantics():
     })
     v = metrics.annotate_verdicts(df)["verdict"].tolist()
     assert v == ["dangerous_miss", "smell_miss", "expected_low", "match", "early_warning_ok", "soft_miss"]
+
+
+def test_forecast_weather_replaces_only_the_horizon():
+    from tsfm_h2s.data import FORECAST_WEATHER_COVARIATES
+
+    panel = _panel()
+    index = panel[STATIONS[0]].index
+    origin = index[24 * 40]
+    issued = origin - pd.Timedelta(minutes=50)
+    fc = pd.DataFrame(-7.0, index=index, columns=FORECAST_WEATHER_COVARIATES)  # sentinel forecast values
+    by_issue = {(issued, s): fc for s in STATIONS}
+    mapping = pd.Series([issued], index=pd.DatetimeIndex([origin]))
+
+    spy = Spy()
+    cfg = backtest.BacktestConfig(mode="covariates", context_length=128, weather="forecast", transform="none",
+                                  stations=[STATIONS[0]])
+    out = backtest.run_backtest(spy, panel, pd.DatetimeIndex([origin]), cfg, progress=False,
+                                weather_forecast=(by_issue, mapping))
+    known = spy.seen[2][0]
+    cols = cfg.known_covariates
+    obs = panel[STATIONS[0]]
+    for row, col in enumerate(cols):
+        ctx, hor = known[row, :128], known[row, 128:]
+        assert np.allclose(ctx, obs[col].iloc[24 * 40 - 128 : 24 * 40])  # context = observed
+        if col in FORECAST_WEATHER_COVARIATES:
+            assert np.all(hor == -7.0)  # horizon = archived forecast
+        elif col in ("surface_pressure", "cloud_cover"):
+            assert np.all(hor == ctx[-1])  # not forecast: persistence
+        else:  # tide / calendar: deterministic, unchanged
+            assert np.allclose(hor, obs[col].iloc[24 * 40 : 24 * 40 + 24])
+    assert (out["weather_issued_at"] == issued).all()

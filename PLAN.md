@@ -41,15 +41,25 @@ The experiment is cheap, so run it and let the backtest decide.
 | Data | Source | Coverage |
 |---|---|---|
 | Hourly obs + covariates (`modeldata_h2s_nofill.parquet`, 58 cols) | `resilentpublic/latest/tijuana/forecast_data/` | 2023-11-20 → present (~58k rows, 3 stations, ~94–98% hourly coverage) |
-| Production XGBoost forecasts joined to actuals (`validation.parquet`) | `resilentpublic/tijuana/forecast/validation_store/` | 711 runs, 2026-06-28 → present, leads 1–24, both variants, p5/p10/p30 |
+| Production XGBoost forecasts joined to actuals (`validation.parquet`) | `resilentpublic/tijuana/forecast/validation_store/` | 711 runs (593 distinct origin hours), 2026-06-28 → present, leads 1–24, both variants, p5/p10/p30 |
+| **Archived weather forecasts** (raw Open-Meteo 15-min responses, all 3 sites, past 24 h + next 24 h) | `resilentpublic/tijuana/weather/raw/forecast_15min/forecast_15min_<issued>.json` | ~4 800 issuances, roughly hourly, 2026-04-10 → present. ~25% of files are unreadable and get skipped. The latest snapshot is also at `tijuana/weather/output/forecast_15min/<site>/` |
 
 Covariate roles (TSFM terms):
 
 - **Known-future** (also known over the forecast horizon): weather
   (temperature, wind speed/dir sin-cos, RH, pressure, cloud, dewpoint, precip),
-  tide height, calendar (hour/month sin-cos, is_night). In operations these come
-  from forecasts; in the backtest they are *observed* values ⇒ **oracle
-  weather**, an optimistic upper bound. Ablation A3 measures how much is at stake.
+  tide height, calendar (hour/month sin-cos, is_night). Two settings
+  (`--weather`):
+  - **`forecast` (operational, the headline setting):** the context window uses
+    *observed* weather from modeldata, and the horizon uses the **archived
+    Open-Meteo forecast** that existed at the origin (latest readable issuance
+    ≤ origin, max age 6 h; all 593 production origins have one, median age 1 h).
+    The feed forecasts temperature, wind speed/direction, RH, dewpoint and
+    precipitation. Pressure and cloud cover are held at their last observed
+    value. Tide and calendar are deterministic. Forecast vs observed (lead
+    1–24 h): wind r = 0.73 (biased ~30% high), temperature r = 0.92, RH r = 0.82.
+  - **`oracle` (upper bound):** observed weather over the horizon too. The gap
+    between the two settings measures how much a perfect weather forecast is worth.
 - **Past-only**: border flow (`Flow (m^3/s)--Border`), SBIWTP flow / anomaly /
   deficit (no forecast available).
 - **Target**: `H2S` (ppb). Modelled on `log1p(clip(H2S, 0))` by default (heavy
@@ -86,7 +96,7 @@ Covariate roles (TSFM terms):
 | B2 | Hour-of-day empirical quantiles over last 28 d | target | CPU |
 | X-lean / X-evid | Production XGBoost products | (from validation store) | — |
 | T-uni | Timestral 5M / 28M / 123M / 209M, univariate | target | CPU ok (209M slow → Colab) |
-| T-cov | Timestral + known-future + past-only covariates | target + cov | CPU / Colab |
+| T-cov | Timestral + known-future + past-only covariates, `forecast` and `oracle` weather | target + cov | CPU / Colab |
 | T-mv | Timestral, 3 stations jointly (+cov) | 3 targets + cov | CPU / Colab |
 | F-uni / F-cov / F-mv | TimesFM 3.0, same three configs | | Colab GPU recommended |
 | (later) | TimesFM 2.5 + XReg, Chronos-2, Moirai 2, TiRex | | optional comparators |
@@ -98,6 +108,7 @@ Context length sweep: 512 / 2048 / 8192 h (≈3 wk / 3 mo / 1 yr).
 | Phase | Deliverable | Notebook |
 |---|---|---|
 | 0. Data + harness | loaders, backtest, metrics, leakage tests; data tour | `00_data_tour.py` |
+| 0b. Forecast-weather archive | `data.forecast_weather_for_origins`; horizon covariates from the forecast available at each origin | — |
 | 1. Baselines + XGBoost reference | B0–B2 scored on production origins next to X-lean/X-evid | `01_baselines.py` |
 | 2. Timestral zero-shot | T-uni size sweep → T-cov → T-mv | `02_timestral.py` |
 | 3. TimesFM zero-shot | F-uni → F-cov → F-mv (Colab GPU) | `03_timesfm.py`, `colab/run_backtest_colab.ipynb` |
@@ -133,7 +144,12 @@ the median-regression failure mode and does not help residents.
 
 ## 9. Risks
 
-- Oracle-weather optimism (A3 ablation; later: use archived Open-Meteo forecasts).
+- Weather realism: handled by `--weather forecast`, which uses the forecast
+  archive. The archive starts on 2026-04-10, so the extended winter backtest
+  (2025-10 →) can only run `oracle` weather before that date.
+  Option: backfill with the Open-Meteo Previous Runs API (`*_previous_day1`
+  variables), which can't be reached from the sandbox but works from Colab or
+  a workstation.
 - Few ≥30 ppb events at IB_CIVIC_CTR / SAN_YSIDRO ⇒ wide CIs; report counts with every rate.
 - The validation store overlaps only ~4 months (summer/fall); winter events
   (the main season) come from the extended backtest only.

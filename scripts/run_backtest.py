@@ -26,6 +26,8 @@ def main() -> None:
     ap.add_argument("--context", type=int, default=2048)
     ap.add_argument("--transform", default="log1p", choices=["log1p", "none"])
     ap.add_argument("--seed-lag", type=int, default=0)
+    ap.add_argument("--weather", default="oracle", choices=["oracle", "forecast"],
+                    help="horizon weather for covariate modes: observed (oracle) or archived forecast")
     ap.add_argument("--origins", default="production", choices=["production", "extended"])
     ap.add_argument("--start", default="2025-10-01", help="extended origins: first origin")
     ap.add_argument("--end", default=None, help="extended origins: last origin (default: data end - 24h)")
@@ -46,11 +48,15 @@ def main() -> None:
         origins = origins[: args.limit]
 
     cfg = backtest.BacktestConfig(mode=args.mode, context_length=args.context, transform=args.transform,
-                                  seed_lag_hours=args.seed_lag, batch_size=args.batch_size)
+                                  seed_lag_hours=args.seed_lag, weather=args.weather, batch_size=args.batch_size)
+    weather_forecast = None
+    if args.weather == "forecast" and "covariates" in args.mode:
+        weather_forecast = data.forecast_weather_for_origins(origins)
     model = get_model(args.model, device=args.device)
-    out = backtest.run_backtest(model, panel, origins, cfg)
+    out = backtest.run_backtest(model, panel, origins, cfg, weather_forecast=weather_forecast)
 
-    tag = f"{model.name}__{args.mode}__ctx{args.context}__{args.transform}__lag{args.seed_lag}__{args.origins}"
+    weather = f"__wx{args.weather}" if "covariates" in args.mode else ""
+    tag = f"{model.name}__{args.mode}{weather}__ctx{args.context}__{args.transform}__lag{args.seed_lag}__{args.origins}"
     RESULTS.mkdir(exist_ok=True)
     path = RESULTS / f"{tag}.parquet"
     out.to_parquet(path, index=False)

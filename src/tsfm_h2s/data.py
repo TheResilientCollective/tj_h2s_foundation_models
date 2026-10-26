@@ -101,3 +101,142 @@ def fill_covariates(panel: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         g[cov] = g[cov].interpolate(method="time", limit=6).ffill().bfill()
         out[station] = g
     return out
+
+
+# --------------------------------------------------------------------------- archived weather forecasts
+#
+# Observed (historic) weather lives in modeldata and fills the context window.
+# For the forecast horizon, operations only has a weather *forecast*: the
+# Open-Meteo 15-min feed (``resilient_workflows_public`` asset
+# ``openmeteo_15min_forecast``) archives every raw response, roughly hourly
+# since 2026-04-10, under FORECAST_ARCHIVE_PREFIX. Each file covers the past
+# 24 h and next 24 h for all three stations.
+
+FORECAST_ARCHIVE_PREFIX = "tijuana/weather/raw/forecast_15min/"
+
+STATION_COORDS = {  # tj_h2s_prediction constants.STATIONS
+    "SAN YSIDRO": (32.552794, -117.047286),
+    "NESTOR - BES": (32.567097, -117.090656),
+    "IB CIVIC CTR": (32.576139, -117.115361),
+}
+
+# Known-future covariates the forecast feed provides; the rest of the weather
+# covariates (surface_pressure, cloud_cover) are held at their last observed
+# value in forecast-weather mode. Tide and calendar are deterministic.
+FORECAST_WEATHER_COVARIATES = [
+    "temperature_2m",
+    "wind_speed_10m",
+    "wind_direction_sin",
+    "wind_direction_cos",
+    "relative_humidity_2m",
+    "dewpoint_2m",
+    "precipitation",
+]
+DETERMINISTIC_COVARIATES = ["tide_height", "hour_sin", "hour_cos", "is_night"]
+
+
+def list_forecast_issues() -> pd.Series:
+    """issued_at (UTC) -> object key for every archived forecast, oldest first."""
+    import re
+
+    keys, token = [], None
+    while True:
+        params = {"list-type": "2", "prefix": FORECAST_ARCHIVE_PREFIX, "max-keys": "1000"}
+        if token:
+            params["continuation-token"] = token
+        xml = requests.get(f"{PUBLIC_BASE}/", params=params, timeout=60).text
+        keys += re.findall(r"<Key>([^<]*\.json)</Key>", xml)
+        m = re.search(r"<NextContinuationToken>([^<]*)</NextContinuationToken>", xml)
+        if not m:
+            break
+        token = m.group(1)
+    stamps = pd.to_datetime([k.rsplit("_", 1)[1][:-5] for k in keys], format="%Y%m%dT%H%M%SZ", utc=True)
+    return pd.Series(keys, index=stamps).sort_index()
+
+
+def _parse_forecast(issued_at: pd.Timestamp, payload: list[dict]) -> pd.DataFrame:
+    frames = []
+    for site in payload:
+        lat, lon = site["latitude"], site["longitude"]
+        station = min(STATION_COORDS, key=lambda s: (STATION_COORDS[s][0] - lat) ** 2 + (STATION_COORDS[s][1] - lon) ** 2)
+        m = pd.DataFrame(site["minutely_15"])
+        m["time"] = pd.to_datetime(m["time"], utc=True)
+        m = m.set_index("time")
+        rad = np.deg2rad(m["wind_direction_10m"])
+        m["wind_direction_sin"], m["wind_direction_cos"] = np.sin(rad), np.cos(rad)
+        hourly = m.drop(columns=["wind_direction_10m"]).resample("h").mean()
+        hourly["precipitation"] = m["precipitation"].resample("h").sum(min_count=1)
+        hourly = hourly.rename(columns={"dew_point_2m": "dewpoint_2m"})
+        hourly["station"] = station
+        frames.append(hourly.reset_index())
+    out = pd.concat(frames, ignore_index=True)
+    out["issued_at"] = issued_at
+    return out
+
+
+def load_forecast_archive(issued: list[pd.Timestamp] | None = None, workers: int = 4) -> pd.DataFrame:
+    """Long table (issued_at, station, time, forecast weather) for the requested issuances.
+
+    Downloads only issuances missing from the local cache ``data/forecast_archive.parquet``.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    index = list_forecast_issues()
+    wanted = index if issued is None else index[index.index.isin(pd.DatetimeIndex(issued))]
+    cache = CACHE_DIR / "forecast_archive.parquet"
+    have = pd.read_parquet(cache) if cache.exists() else pd.DataFrame(columns=["issued_at"])
+    missing = wanted[~wanted.index.isin(pd.DatetimeIndex(have["issued_at"]))]
+
+    def fetch(item):
+        import time
+
+        ts, key = item
+        for attempt in range(4):
+            try:
+                r = requests.get(f"{PUBLIC_BASE}/{key}", timeout=60)
+                r.raise_for_status()
+                return _parse_forecast(ts, r.json())
+            except (requests.RequestException, ValueError, KeyError):
+                time.sleep(2**attempt)
+        # a few archive files are truncated at write time (~32 KB); that origin
+        # falls back to the previous readable issuance
+        return None
+
+    if len(missing):
+        with ThreadPoolExecutor(workers) as pool:
+            new = [f for f in pool.map(fetch, missing.items()) if f is not None]
+        print(f"forecast archive: fetched {len(new)}/{len(missing)} issuances ({len(missing) - len(new)} unreadable)")
+        if new:
+            have = pd.concat([have, *new], ignore_index=True) if len(have) else pd.concat(new, ignore_index=True)
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            have.to_parquet(cache, index=False)
+    return have[have["issued_at"].isin(wanted.index)].reset_index(drop=True)
+
+
+def issuance_for_origins(origins: pd.DatetimeIndex, max_age_hours: float = 6.0) -> pd.Series:
+    """origin -> latest archived issuance at or before it (NaT if none within ``max_age_hours``)."""
+    issues = pd.DataFrame({"issued_at": list_forecast_issues().index})
+    left = pd.DataFrame({"origin": pd.DatetimeIndex(origins)}).sort_values("origin")
+    m = pd.merge_asof(left, issues, left_on="origin", right_on="issued_at", direction="backward",
+                      tolerance=pd.Timedelta(hours=max_age_hours))
+    return m.set_index("origin")["issued_at"]
+
+
+def forecast_weather_for_origins(origins: pd.DatetimeIndex, max_age_hours: float = 6.0):
+    """Archived forecasts usable at each origin.
+
+    Returns ``(by_issue, issued)``: ``by_issue[(issued_at, station)]`` is an hourly
+    frame of FORECAST_WEATHER_COVARIATES, and ``issued`` maps origin -> the latest
+    *readable* issuance at or before it (NaT when none within ``max_age_hours``).
+    """
+    origins = pd.DatetimeIndex(origins)
+    index = list_forecast_issues()
+    window = index[(index.index >= origins.min() - pd.Timedelta(hours=max_age_hours)) & (index.index <= origins.max())]
+    archive = load_forecast_archive(window.index.tolist())
+    loaded = pd.DataFrame({"issued_at": sorted(archive["issued_at"].unique())})
+    left = pd.DataFrame({"origin": origins}).sort_values("origin")
+    issued = pd.merge_asof(left, loaded, left_on="origin", right_on="issued_at", direction="backward",
+                           tolerance=pd.Timedelta(hours=max_age_hours)).set_index("origin")["issued_at"]
+    by_issue = {key: g.set_index("time")[FORECAST_WEATHER_COVARIATES].astype("float32")
+                for key, g in archive.groupby(["issued_at", "station"])}
+    return by_issue, issued
