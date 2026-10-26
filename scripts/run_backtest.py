@@ -35,7 +35,16 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--limit", type=int, default=None, help="only the first N origins (smoke tests)")
+    ap.add_argument("--skip-existing", action="store_true", help="exit if this run's results file already exists")
     args = ap.parse_args()
+
+    model = get_model(args.model, device=args.device)
+    weather = f"__wx{args.weather}" if "covariates" in args.mode else ""
+    tag = f"{model.name}__{args.mode}{weather}__ctx{args.context}__{args.transform}__lag{args.seed_lag}__{args.origins}"
+    path = RESULTS / f"{tag}.parquet"
+    if args.skip_existing and path.exists():
+        print(f"exists, skipping -> {path}")
+        return
 
     obs = data.load_obs()
     panel = data.fill_covariates(data.to_panel(obs))
@@ -52,13 +61,9 @@ def main() -> None:
     weather_forecast = None
     if args.weather == "forecast" and "covariates" in args.mode:
         weather_forecast = data.forecast_weather_for_origins(origins)
-    model = get_model(args.model, device=args.device)
     out = backtest.run_backtest(model, panel, origins, cfg, weather_forecast=weather_forecast)
 
-    weather = f"__wx{args.weather}" if "covariates" in args.mode else ""
-    tag = f"{model.name}__{args.mode}{weather}__ctx{args.context}__{args.transform}__lag{args.seed_lag}__{args.origins}"
     RESULTS.mkdir(exist_ok=True)
-    path = RESULTS / f"{tag}.parquet"
     out.to_parquet(path, index=False)
     print(f"wrote {len(out):,} rows -> {path}")
 

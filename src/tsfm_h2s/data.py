@@ -177,40 +177,53 @@ def _parse_forecast(issued_at: pd.Timestamp, payload: list[dict]) -> pd.DataFram
 def load_forecast_archive(issued: list[pd.Timestamp] | None = None, workers: int = 4) -> pd.DataFrame:
     """Long table (issued_at, station, time, forecast weather) for the requested issuances.
 
-    Downloads only issuances missing from the local cache ``data/forecast_archive.parquet``.
+    Each parsed issuance is cached as ``data/forecast_archive/<issued>.parquet``
+    as soon as it is fetched, so an interrupted load resumes where it stopped.
+    Unreadable (truncated) archive files are remembered in ``_unreadable.txt``.
     """
-    from concurrent.futures import ThreadPoolExecutor
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     index = list_forecast_issues()
     wanted = index if issued is None else index[index.index.isin(pd.DatetimeIndex(issued))]
-    cache = CACHE_DIR / "forecast_archive.parquet"
-    have = pd.read_parquet(cache) if cache.exists() else pd.DataFrame(columns=["issued_at"])
-    missing = wanted[~wanted.index.isin(pd.DatetimeIndex(have["issued_at"]))]
+    cache = CACHE_DIR / "forecast_archive"
+    cache.mkdir(parents=True, exist_ok=True)
+    bad_file = cache / "_unreadable.txt"
+    bad = set(bad_file.read_text().split()) if bad_file.exists() else set()
+
+    def path(ts):
+        return cache / f"{ts:%Y%m%dT%H%M%SZ}.parquet"
+
+    missing = [(ts, key) for ts, key in wanted.items() if not path(ts).exists() and key not in bad]
 
     def fetch(item):
-        import time
-
         ts, key = item
         for attempt in range(4):
             try:
                 r = requests.get(f"{PUBLIC_BASE}/{key}", timeout=60)
                 r.raise_for_status()
-                return _parse_forecast(ts, r.json())
+                _parse_forecast(ts, r.json()).to_parquet(path(ts), index=False)
+                return True
             except (requests.RequestException, ValueError, KeyError):
                 time.sleep(2**attempt)
-        # a few archive files are truncated at write time (~32 KB); that origin
-        # falls back to the previous readable issuance
-        return None
+        return False
 
-    if len(missing):
+    if missing:
+        failed = []
         with ThreadPoolExecutor(workers) as pool:
-            new = [f for f in pool.map(fetch, missing.items()) if f is not None]
-        print(f"forecast archive: fetched {len(new)}/{len(missing)} issuances ({len(missing) - len(new)} unreadable)")
-        if new:
-            have = pd.concat([have, *new], ignore_index=True) if len(have) else pd.concat(new, ignore_index=True)
-            CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            have.to_parquet(cache, index=False)
-    return have[have["issued_at"].isin(wanted.index)].reset_index(drop=True)
+            futures = {pool.submit(fetch, item): item for item in missing}
+            for i, fut in enumerate(as_completed(futures), 1):
+                if not fut.result():
+                    failed.append(futures[fut][1])
+                if i % 200 == 0 or i == len(missing):
+                    print(f"forecast archive: {i}/{len(missing)} fetched, {len(failed)} unreadable", flush=True)
+        if failed:
+            # a few archive files are truncated at write time (~32 KB); those
+            # origins fall back to the previous readable issuance
+            bad_file.write_text("\n".join(sorted(bad | set(failed))))
+
+    frames = [pd.read_parquet(path(ts)) for ts in wanted.index if path(ts).exists()]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["issued_at", "station", "time"])
 
 
 def issuance_for_origins(origins: pd.DatetimeIndex, max_age_hours: float = 6.0) -> pd.Series:
@@ -230,9 +243,14 @@ def forecast_weather_for_origins(origins: pd.DatetimeIndex, max_age_hours: float
     *readable* issuance at or before it (NaT when none within ``max_age_hours``).
     """
     origins = pd.DatetimeIndex(origins)
-    index = list_forecast_issues()
-    window = index[(index.index >= origins.min() - pd.Timedelta(hours=max_age_hours)) & (index.index <= origins.max())]
-    archive = load_forecast_archive(window.index.tolist())
+    stamps = pd.Series(list_forecast_issues().index)
+    # only the last few issuances before each origin can ever be chosen
+    candidates = set()
+    for origin in origins:
+        hi = stamps.searchsorted(origin, side="right")
+        recent = stamps.iloc[max(0, hi - 3) : hi]
+        candidates.update(recent[recent >= origin - pd.Timedelta(hours=max_age_hours)])
+    archive = load_forecast_archive(sorted(candidates))
     loaded = pd.DataFrame({"issued_at": sorted(archive["issued_at"].unique())})
     left = pd.DataFrame({"origin": origins}).sort_values("origin")
     issued = pd.merge_asof(left, loaded, left_on="origin", right_on="issued_at", direction="backward",
