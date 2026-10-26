@@ -109,3 +109,22 @@ def test_forecast_weather_replaces_only_the_horizon():
         else:  # tide / calendar: deterministic, unchanged
             assert np.allclose(hor, obs[col].iloc[24 * 40 : 24 * 40 + 24])
     assert (out["weather_issued_at"] == issued).all()
+
+
+def test_truncated_forecast_archive_is_repaired():
+    import json
+
+    from tsfm_h2s.data import _FORECAST_FIELDS, _load_forecast_json
+
+    n = 8
+    site = {"latitude": 32.56, "longitude": -117.09,
+            "minutely_15": {"time": [f"2026-07-01T00:{15 * (i % 4):02d}" for i in range(n)],
+                            **{f: [1.0] * n for f in _FORECAST_FIELDS}, "weather_code": [3] * n}}
+    full = json.dumps([site, site])
+    cut = full[: full.rfind("weather_code") + 30]  # stored object truncated inside the last array
+    payload = _load_forecast_json(cut)
+    assert len(payload) == 2 and all("weather_code" not in s["minutely_15"] for s in payload)
+    with pytest.raises(ValueError):
+        _load_forecast_json(full[: full.find("dew_point_2m") + 30])  # cut inside a used field
+    with pytest.raises(ValueError):
+        _load_forecast_json('{"error": true, "reason": "limit"}')

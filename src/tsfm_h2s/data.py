@@ -154,17 +154,47 @@ def list_forecast_issues() -> pd.Series:
     return pd.Series(keys, index=stamps).sort_index()
 
 
+_FORECAST_FIELDS = ["temperature_2m", "relative_humidity_2m", "dew_point_2m", "precipitation",
+                    "wind_speed_10m", "wind_direction_10m"]
+
+
+def _load_forecast_json(text: str) -> list[dict]:
+    """Parse an archived response, repairing the common write-time truncation.
+
+    Many archive objects are cut off (~32 KB) inside the *last* array of the
+    last site (``weather_code``, unused here). Closing the JSON recovers every
+    field we use; the result is checked so a deeper truncation still fails.
+    """
+    import json
+
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        body = text.rstrip()
+        body = body[: body.rfind(",")]  # drop the possibly partial last value
+        payload = json.loads(body + "]}}]")
+    if not isinstance(payload, list):  # an archived API error response
+        raise ValueError("archive file is not a forecast response")
+    for site in payload:
+        m = site["minutely_15"]
+        n = len(m["time"])
+        if any(len(m.get(f, [])) != n for f in _FORECAST_FIELDS):
+            raise ValueError("archive file truncated inside a used field")
+        m.pop("weather_code", None)
+    return payload
+
+
 def _parse_forecast(issued_at: pd.Timestamp, payload: list[dict]) -> pd.DataFrame:
     frames = []
     for site in payload:
         lat, lon = site["latitude"], site["longitude"]
         station = min(STATION_COORDS, key=lambda s: (STATION_COORDS[s][0] - lat) ** 2 + (STATION_COORDS[s][1] - lon) ** 2)
-        m = pd.DataFrame(site["minutely_15"])
+        m = pd.DataFrame({k: v for k, v in site["minutely_15"].items() if k == "time" or k in _FORECAST_FIELDS})
         m["time"] = pd.to_datetime(m["time"], utc=True)
         m = m.set_index("time")
         rad = np.deg2rad(m["wind_direction_10m"])
         m["wind_direction_sin"], m["wind_direction_cos"] = np.sin(rad), np.cos(rad)
-        hourly = m.drop(columns=["wind_direction_10m"]).resample("h").mean()
+        hourly = m.drop(columns=["wind_direction_10m"]).astype(float).resample("h").mean()
         hourly["precipitation"] = m["precipitation"].resample("h").sum(min_count=1)
         hourly = hourly.rename(columns={"dew_point_2m": "dewpoint_2m"})
         hourly["station"] = station
@@ -202,10 +232,12 @@ def load_forecast_archive(issued: list[pd.Timestamp] | None = None, workers: int
             try:
                 r = requests.get(f"{PUBLIC_BASE}/{key}", timeout=60)
                 r.raise_for_status()
-                _parse_forecast(ts, r.json()).to_parquet(path(ts), index=False)
+                _parse_forecast(ts, _load_forecast_json(r.text)).to_parquet(path(ts), index=False)
                 return True
-            except (requests.RequestException, ValueError, KeyError):
+            except requests.RequestException:
                 time.sleep(2**attempt)
+            except (ValueError, KeyError, TypeError):
+                return False  # stored object is unusable; retrying will not help
         return False
 
     if missing:
