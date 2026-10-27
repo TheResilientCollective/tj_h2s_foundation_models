@@ -72,7 +72,10 @@ are statistically tied.
 
 ## Still to run
 
-TimesFM with forecast and oracle weather (CPU, in progress). Larger
-models, longer contexts and the winter backtest run on the Colab GPU
-(`colab/run_backtest_colab.ipynb`). Then the cutoff calibration, which picks
+TimesFM 3.0 with weather covariates: on CPU it didn't finish 593 origins in
+2 h (the extra covariate channels make it much slower than the univariate
+run), so it moves to the Colab GPU along with the larger models, longer
+contexts and the winter backtest (`colab/run_backtest_colab.ipynb`, already
+listed there). Given finding 1, weather is unlikely to change TimesFM's
+standing much. Then the cutoff calibration, which picks
 P(>k) thresholds on a tuning window and evaluates them on a held-out one.
