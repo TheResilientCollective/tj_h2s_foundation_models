@@ -12,13 +12,31 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import pandas as pd
+
 from tsfm_h2s import backtest, data
-from tsfm_h2s.models import get_model
+from tsfm_h2s.models import get_model, model_name
 
 RESULTS = Path(__file__).resolve().parents[1] / "results"
 
 
-def main() -> None:
+def run_tag(model_name: str, args: argparse.Namespace) -> str:
+    """Results file name: every option that changes the forecasts is in it.
+
+    Runs can then go in parallel (separate pods or processes on one machine)
+    without overwriting each other, and --skip-existing never mistakes a
+    different configuration (e.g. a --limit smoke test) for this one.
+    """
+    weather = f"__wx{args.weather}" if "covariates" in args.mode else ""
+    limit = f"__limit{args.limit}" if args.limit else ""
+    origins = args.origins
+    if origins == "extended":
+        end = pd.Timestamp(args.end).strftime("%Y%m%d") if args.end else "dataend"
+        origins += f"-{pd.Timestamp(args.start):%Y%m%d}-{end}-{args.every}h"
+    return f"{model_name}__{args.mode}{weather}__ctx{args.context}__{args.transform}__lag{args.seed_lag}{limit}__{origins}"
+
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--mode", default="univariate",
@@ -36,22 +54,25 @@ def main() -> None:
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--limit", type=int, default=None, help="only the first N origins (smoke tests)")
     ap.add_argument("--skip-existing", action="store_true", help="exit if this run's results file already exists")
-    args = ap.parse_args()
+    return ap
 
-    model = get_model(args.model, device=args.device)
-    weather = f"__wx{args.weather}" if "covariates" in args.mode else ""
-    tag = f"{model.name}__{args.mode}{weather}__ctx{args.context}__{args.transform}__lag{args.seed_lag}__{args.origins}"
-    path = RESULTS / f"{tag}.parquet"
+
+def main() -> None:
+    args = build_parser().parse_args()
+
+    path = RESULTS / f"{run_tag(model_name(args.model), args)}.parquet"
     if args.skip_existing and path.exists():
         print(f"exists, skipping -> {path}")
         return
+    model = get_model(args.model, device=args.device)
+    assert model.name == model_name(args.model), (model.name, model_name(args.model))
 
     obs = data.load_obs()
     panel = data.fill_covariates(data.to_panel(obs))
     if args.origins == "production":
         origins = backtest.production_origins(data.load_validation_store())
     else:
-        end = args.end or (obs["time"].max() - __import__("pandas").Timedelta(hours=24))
+        end = args.end or (obs["time"].max() - pd.Timedelta(hours=24))
         origins = backtest.synthetic_origins(args.start, end, args.every)
     if args.limit:
         origins = origins[: args.limit]
@@ -64,7 +85,7 @@ def main() -> None:
     out = backtest.run_backtest(model, panel, origins, cfg, weather_forecast=weather_forecast)
 
     RESULTS.mkdir(exist_ok=True)
-    out.to_parquet(path, index=False)
+    data.atomic_write(path, lambda tmp: out.to_parquet(tmp, index=False))
     print(f"wrote {len(out):,} rows -> {path}")
 
 

@@ -41,6 +41,21 @@ uv run python scripts/nrp_results.py fetch    # -> results/*.parquet, skipping f
 uv run marimo edit notebooks/04_leaderboard.py
 ```
 
+## Why one script for every model
+
+All runs go through the same `scripts/run_backtest.py`, so every model gets
+the same origins, data, leakage guard and scoring, and differences come from
+the models alone. Runs are separate processes (separate pods here) that share
+nothing but read-only inputs:
+
+* each results file name encodes every option that changes the forecasts
+  (`run_tag()`: model, mode, weather, context, transform, staleness, `--limit`,
+  and the origin window), so parallel runs never overwrite each other and
+  `--skip-existing` never mistakes one configuration for another;
+* results and caches are written to a temp file and renamed (`data.atomic_write`),
+  so runs sharing a machine and a `data/` cache can't leave a half-written
+  file behind.
+
 ## Change the runs
 
 Edit `runs.txt` in the ConfigMap. Lines are `scripts/run_backtest.py`

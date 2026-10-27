@@ -45,6 +45,16 @@ PAST_ONLY_COVARIATES = [
 ]
 
 
+def atomic_write(path: Path, write) -> None:
+    """Write via a temp file + rename, so a reader (or a parallel run) never sees a partial file."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        write(tmp)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def _fetch(url: str, refresh: bool = False) -> bytes:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = CACHE_DIR / url.rsplit("/", 1)[-1]
@@ -52,7 +62,7 @@ def _fetch(url: str, refresh: bool = False) -> bytes:
         return path.read_bytes()
     resp = requests.get(url, timeout=120)
     resp.raise_for_status()
-    path.write_bytes(resp.content)
+    atomic_write(path, lambda tmp: tmp.write_bytes(resp.content))
     return resp.content
 
 
@@ -254,7 +264,8 @@ def load_forecast_archive(issued: list[pd.Timestamp] | None = None, workers: int
             try:
                 r = requests.get(f"{PUBLIC_BASE}/{key}", timeout=60)
                 r.raise_for_status()
-                _parse_forecast(ts, _load_forecast_json(r.text)).to_parquet(path(ts), index=False)
+                frame = _parse_forecast(ts, _load_forecast_json(r.text))
+                atomic_write(path(ts), lambda tmp: frame.to_parquet(tmp, index=False))
                 return True
             except requests.RequestException:
                 time.sleep(2**attempt)

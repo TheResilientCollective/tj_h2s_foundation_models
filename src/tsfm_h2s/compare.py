@@ -30,7 +30,10 @@ def label(df: pd.DataFrame) -> pd.Series:
 
 
 def load_results(origins: str = "production", include_xgboost: bool = True) -> pd.DataFrame:
-    frames = [pd.read_parquet(p) for p in sorted(RESULTS_DIR.glob(f"*__{origins}.parquet"))]
+    # extended runs carry their window in the name: <...>__extended-20251001-dataend-6h.parquet;
+    # --limit smoke tests (__limitN__) are never part of the comparison
+    paths = [p for p in sorted(RESULTS_DIR.glob(f"*__{origins}*.parquet")) if "__limit" not in p.name]
+    frames = [pd.read_parquet(p) for p in paths]
     if include_xgboost and origins == "production":
         v = data.load_validation_store()
         frames += [backtest.production_reference(v, variant) for variant in ("lean", "evidence")]
