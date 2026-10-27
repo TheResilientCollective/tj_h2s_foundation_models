@@ -64,7 +64,9 @@ needed. Files are cached in `data/`.
 
 * `latest/tijuana/forecast_data/modeldata_h2s_nofill.parquet`: hourly H2S + weather/tide/flow/SBIWTP, 3 stations, 2023-11 → present
 * `tijuana/forecast/validation_store/validation.parquet`: production XGBoost products (Lean/Evidence, leads 1–24) joined to measured H2S, 2026-06-28 → present
-* `tijuana/weather/raw/forecast_15min/forecast_15min_<issued>.json`: archived Open-Meteo forecasts, roughly hourly since 2026-04-10. `--weather forecast` uses the issuance available at each origin for the horizon covariates. The context window always uses observed weather from modeldata. The parsed archive is cached in `data/forecast_archive.parquet`.
+* `tijuana/weather/output/forecast_15min/all/forecast_15min.parquet`: the **current** Open-Meteo forecast (past 24 h + next 24 h), read by `data.load_latest_forecast()` for live / forward runs. It is overwritten every run.
+* `tijuana/weather/raw/forecast_15min/forecast_15min_<issued>.json`: the only **history** of past forecasts (roughly hourly since 2026-04-10). `--weather forecast` uses the issuance available at each origin for the horizon covariates. Many files are truncated inside the unused `weather_code` array; the loader repairs those. Parsed issuances are cached as parquet in `data/forecast_archive/`. Both sources give the same values to float32 rounding.
+* The context window always uses observed weather from modeldata.
 
 ## Licensing notes
 

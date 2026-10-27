@@ -113,6 +113,7 @@ def fill_covariates(panel: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
 # 24 h and next 24 h for all three stations.
 
 FORECAST_ARCHIVE_PREFIX = "tijuana/weather/raw/forecast_15min/"
+LATEST_FORECAST_URL = f"{PUBLIC_BASE}/tijuana/weather/output/forecast_15min/all/forecast_15min.parquet"
 
 STATION_COORDS = {  # tj_h2s_prediction constants.STATIONS
     "SAN YSIDRO": (32.552794, -117.047286),
@@ -184,22 +185,43 @@ def _load_forecast_json(text: str) -> list[dict]:
     return payload
 
 
+def _hourly_forecast(m: pd.DataFrame, station: str) -> pd.DataFrame:
+    """15-min forecast rows (time + _FORECAST_FIELDS) -> hourly covariates for one station."""
+    m = m.assign(time=pd.to_datetime(m["time"], utc=True)).set_index("time")[_FORECAST_FIELDS].astype(float)
+    rad = np.deg2rad(m["wind_direction_10m"])
+    m["wind_direction_sin"], m["wind_direction_cos"] = np.sin(rad), np.cos(rad)
+    hourly = m.drop(columns=["wind_direction_10m"]).resample("h").mean()
+    hourly["precipitation"] = m["precipitation"].resample("h").sum(min_count=1)
+    hourly = hourly.rename(columns={"dew_point_2m": "dewpoint_2m"})
+    hourly["station"] = station
+    return hourly.reset_index()
+
+
 def _parse_forecast(issued_at: pd.Timestamp, payload: list[dict]) -> pd.DataFrame:
+    """Archived raw JSON response (all sites) -> hourly long table."""
     frames = []
     for site in payload:
         lat, lon = site["latitude"], site["longitude"]
         station = min(STATION_COORDS, key=lambda s: (STATION_COORDS[s][0] - lat) ** 2 + (STATION_COORDS[s][1] - lon) ** 2)
-        m = pd.DataFrame({k: v for k, v in site["minutely_15"].items() if k == "time" or k in _FORECAST_FIELDS})
-        m["time"] = pd.to_datetime(m["time"], utc=True)
-        m = m.set_index("time")
-        rad = np.deg2rad(m["wind_direction_10m"])
-        m["wind_direction_sin"], m["wind_direction_cos"] = np.sin(rad), np.cos(rad)
-        hourly = m.drop(columns=["wind_direction_10m"]).astype(float).resample("h").mean()
-        hourly["precipitation"] = m["precipitation"].resample("h").sum(min_count=1)
-        hourly = hourly.rename(columns={"dew_point_2m": "dewpoint_2m"})
-        hourly["station"] = station
-        frames.append(hourly.reset_index())
+        frames.append(_hourly_forecast(pd.DataFrame(site["minutely_15"]), station))
     out = pd.concat(frames, ignore_index=True)
+    out["issued_at"] = issued_at
+    return out
+
+
+def load_latest_forecast() -> pd.DataFrame:
+    """The current forecast from the published parquet (past 24 h + next 24 h, all sites).
+
+    Same hourly schema as ``load_forecast_archive``; ``issued_at`` is the object's
+    Last-Modified time. Use this for live / forward runs. The parquet is
+    overwritten each run, so past issuances only exist in the raw JSON archive.
+    """
+    resp = requests.get(LATEST_FORECAST_URL, timeout=60)
+    resp.raise_for_status()
+    df = pd.read_parquet(io.BytesIO(resp.content))
+    issued_at = pd.Timestamp(resp.headers["Last-Modified"]).tz_convert("UTC")
+    out = pd.concat([_hourly_forecast(g, station) for station, g in df.groupby("site_name") if station in STATION_COORDS],
+                    ignore_index=True)
     out["issued_at"] = issued_at
     return out
 
