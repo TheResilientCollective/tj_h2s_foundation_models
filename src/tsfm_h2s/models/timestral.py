@@ -1,6 +1,6 @@
 """Mistral Timestral adapter (https://github.com/mistralai/timestral).
 
-Install: ``uv sync --extra timestral``. Runs on CPU; ``device="cuda"`` on Colab.
+Installed by ``uv sync`` (a core dependency). Runs on CPU; ``device="cuda"`` on a GPU.
 Sizes: Timestral-5M / 28M / 123M / 209M. Context up to 32 768 steps; NaN = missing.
 """
 

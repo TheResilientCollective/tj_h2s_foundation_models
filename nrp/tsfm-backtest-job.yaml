@@ -73,7 +73,7 @@ spec:
               git clone -q --depth 1 --branch "${GIT_REF}" "https://${AUTH}github.com/TheResilientCollective/tj_h2s_foundation_models.git" repo
               cd repo && git log --oneline -1
               # torch comes from the image (neither model pins it)
-              pip install -q -e ".[timestral,timesfm,nrp]"
+              pip install -q -e ".[nrp]"
               bash nrp/run_index.sh
           env:
             - name: GIT_REF

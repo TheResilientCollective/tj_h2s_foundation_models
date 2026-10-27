@@ -3586,22 +3586,21 @@ dependencies = [
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "timesfm", extra = ["torch"] },
+    { name = "timestral" },
+    { name = "torch" },
     { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-]
 nrp = [
     { name = "boto3" },
 ]
-timesfm = [
-    { name = "timesfm", extra = ["torch"] },
-]
-timestral = [
-    { name = "timestral" },
-    { name = "torch" },
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -3612,15 +3611,20 @@ requires-dist = [
     { name = "numpy" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "pyarrow" },
-    { name = "pytest", marker = "extra == 'dev'" },
     { name = "requests" },
     { name = "scipy" },
-    { name = "timesfm", extras = ["torch"], marker = "extra == 'timesfm'", git = "https://github.com/google-research/timesfm.git" },
-    { name = "timestral", marker = "extra == 'timestral'", git = "https://github.com/mistralai/timestral.git" },
-    { name = "torch", marker = "extra == 'timestral'", specifier = ">=2.4" },
+    { name = "timesfm", extras = ["torch"], git = "https://github.com/google-research/timesfm.git" },
+    { name = "timestral", git = "https://github.com/mistralai/timestral.git" },
+    { name = "torch", specifier = ">=2.4" },
     { name = "tqdm" },
 ]
-provides-extras = ["timestral", "timesfm", "nrp", "dev"]
+provides-extras = ["nrp"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest" },
+    { name = "pyyaml" },
+]
 
 [[package]]
 name = "typing-extensions"

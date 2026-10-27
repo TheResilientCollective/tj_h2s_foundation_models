@@ -35,7 +35,7 @@ tests/                           leakage guard, baselines, P(>k), rubric parity
 ## Quickstart
 
 ```bash
-uv sync --extra timestral --extra timesfm --extra dev   # CPU torch is fine for 5M/28M
+uv sync          # includes Timestral + TimesFM; CPU torch is fine for 5M/28M
 uv run pytest
 
 # notebooks

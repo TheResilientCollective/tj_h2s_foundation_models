@@ -13,13 +13,17 @@ dependencies = [
     "scipy",
     "matplotlib",
     "tqdm",
+    # the models under test; torch is unpinned so a CUDA image's torch is kept
+    "torch>=2.4",
+    "timestral @ git+https://github.com/mistralai/timestral.git",
+    "timesfm[torch] @ git+https://github.com/google-research/timesfm.git",
 ]
 
 [project.optional-dependencies]
-timestral = ["torch>=2.4", "timestral @ git+https://github.com/mistralai/timestral.git"]
-timesfm = ["timesfm[torch] @ git+https://github.com/google-research/timesfm.git"]
-nrp = ["boto3"]
-dev = ["pytest"]
+nrp = ["boto3"]  # results upload/fetch for the NRP GPU job
+
+[dependency-groups]
+dev = ["pytest", "pyyaml"]  # installed by default by `uv sync` / `uv run`
 
 [build-system]
 requires = ["hatchling"]

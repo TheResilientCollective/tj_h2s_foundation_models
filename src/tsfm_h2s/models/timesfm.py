@@ -1,6 +1,6 @@
 """Google TimesFM 3.0 adapter (https://github.com/google-research/timesfm).
 
-Install: ``uv sync --extra timesfm``. GPU strongly recommended for full backtests
+Installed by ``uv sync`` (a core dependency). GPU strongly recommended for full backtests
 (use ``colab/run_backtest_colab.ipynb``); CPU works for small runs.
 
 LICENSE: TimesFM 3.0 self-hosted weights are non-commercial / non-production
