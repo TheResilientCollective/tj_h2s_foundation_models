@@ -108,7 +108,8 @@ def _(data, days, end, panel, pd, plt, station):
     _a1.plot(_w.index, _w[data.TARGET], color="black", lw=1)
     for _k, _c in ((5, "#d4b106"), (10, "#e8890c"), (30, "#d4380d")):
         _a1.axhline(_k, color=_c, ls="--", lw=0.8)
-    _a1.set_yscale("symlog", linthresh=5)
+    #_a1.set_yscale("symlog", linthresh=5)
+    _a1.set_yscale("linear")
     _a1.set_ylabel("H2S ppb")
     _a2.plot(_w.index, _w["wind_speed_10m"], label="wind speed")
     _a2b = _a2.twinx()
