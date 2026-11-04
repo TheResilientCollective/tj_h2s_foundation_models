@@ -8,6 +8,7 @@
 #     "matplotlib",
 #     "scipy",
 #     "requests",
+#     "tzdata",
 #     "tsfm_h2s @ https://raw.githubusercontent.com/TheResilientCollective/tj_h2s_foundation_models/main/wheels/tsfm_h2s-0.1.0-py3-none-any.whl",
 # ]
 # ///
@@ -95,8 +96,9 @@ def _(data, np, panel, plt):
 @app.cell
 def _(data, panel, pd, plt):
     _monthly = pd.DataFrame({_s: (_g[data.TARGET] >= 10).resample("MS").sum() for _s, _g in panel.items()})
+    _monthly.index = [d.strftime("%Y-%m") for d in _monthly.index]  # plain labels: a tz-aware period axis is not plottable everywhere
     _ax = _monthly.plot(kind="bar", figsize=(12, 3.5), width=0.85)
-    _ax.set_xticklabels([d.strftime("%Y-%m") for d in _monthly.index], rotation=90, fontsize=7)
+    _ax.tick_params(axis="x", rotation=90, labelsize=7)
     _ax.set_ylabel("hours ≥10 ppb")
     _ax.set_title("Seasonality of smell-level hours — note which months the production validation store covers")
     plt.tight_layout()
