@@ -8,7 +8,7 @@
 #     "matplotlib",
 #     "scipy",
 #     "requests",
-#     "tsfm_h2s @ https://github.com/TheResilientCollective/tj_h2s_foundation_models/releases/download/v0.1.0/tsfm_h2s-0.1.0-py3-none-any.whl",
+#     "tsfm_h2s @ https://raw.githubusercontent.com/TheResilientCollective/tj_h2s_foundation_models/main/wheels/tsfm_h2s-0.1.0-py3-none-any.whl",
 # ]
 # ///
 

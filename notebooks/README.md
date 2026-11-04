@@ -3,20 +3,20 @@
 Each notebook can be opened directly in [marimo online](https://marimo.app)
 from GitHub. Online, the notebooks run in the browser (Pyodide/WASM). Each
 notebook carries a [PEP 723](https://peps.python.org/pep-0723/) header that
-lists its dependencies, including the `tsfm_h2s` wheel attached to the GitHub
-release named there; marimo.app installs them on load. Torch, Timestral and
-TimesFM are excluded from the wheel under Pyodide (environment markers in
-`pyproject.toml`), so the data tour, baselines and leaderboard notebooks can
-run online, while the Timestral and TimesFM notebooks are read-only there.
-Cells that need the local `data/` cache or `results/*.parquet` still need a
-local run.
+lists its dependencies, including the `tsfm_h2s` wheel committed under
+`wheels/` (fetched from raw.githubusercontent.com, which allows cross-origin
+requests; GitHub release assets do not); marimo.app installs them on load.
+Torch, Timestral and TimesFM are excluded from the wheel under Pyodide
+(environment markers in `pyproject.toml`), so the data tour, baselines and
+leaderboard notebooks can run online, while the Timestral and TimesFM
+notebooks are read-only there. Cells that need the local `data/` cache or
+`results/*.parquet` still need a local run.
 
-After changing `src/tsfm_h2s`, rebuild and re-publish the wheel, bumping the
+After changing `src/tsfm_h2s`, rebuild the wheel and commit it, bumping the
 version in `pyproject.toml` and the notebook headers:
 
 ```bash
-uv build --wheel
-gh release create v0.1.0 dist/tsfm_h2s-0.1.0-py3-none-any.whl
+uv build --wheel && cp dist/tsfm_h2s-*.whl wheels/
 ```
 
 | Notebook | What it does | Open online |
