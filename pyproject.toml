@@ -13,10 +13,13 @@ dependencies = [
     "scipy",
     "matplotlib",
     "tqdm",
-    # the models under test; torch is unpinned so a CUDA image's torch is kept
-    "torch>=2.4",
-    "timestral @ git+https://github.com/mistralai/timestral.git",
-    "timesfm[torch] @ git+https://github.com/google-research/timesfm.git",
+    # the models under test; torch is unpinned so a CUDA image's torch is kept.
+    # The emscripten marker leaves them out of the wheel that marimo.app
+    # installs in the browser (see notebooks/README.md); pip/uv elsewhere
+    # install them as before.
+    "torch>=2.4; sys_platform != 'emscripten'",
+    "timestral @ git+https://github.com/mistralai/timestral.git ; sys_platform != 'emscripten'",
+    "timesfm[torch] @ git+https://github.com/google-research/timesfm.git ; sys_platform != 'emscripten'",
 ]
 
 [project.optional-dependencies]

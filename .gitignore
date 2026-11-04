@@ -6,3 +6,4 @@ results/*.parquet
 !results/.gitkeep
 __marimo__/
 .ipynb_checkpoints/
+dist/

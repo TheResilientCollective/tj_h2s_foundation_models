@@ -1,3 +1,17 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "marimo",
+#     "numpy",
+#     "pandas>=2.2",
+#     "pyarrow",
+#     "matplotlib",
+#     "scipy",
+#     "requests",
+#     "tsfm_h2s @ https://github.com/TheResilientCollective/tj_h2s_foundation_models/releases/download/v0.1.0/tsfm_h2s-0.1.0-py3-none-any.whl",
+# ]
+# ///
+
 import marimo
 
 __generated_with = "0.25.2"
